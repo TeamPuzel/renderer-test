@@ -359,7 +359,7 @@ namespace rt {
     class HeuristicTimestampBasedRefreshRateLock final {
         std::vector<f64> acc;
         f64 previous_stamp { timestamp() };
-        usize misses { 0 };
+        mutable f64 phase { 0.0 };
 
       public:
         enum CommonRate : u32 {
@@ -402,29 +402,47 @@ namespace rt {
                 const f64 closest = 1000.0 / (f64) (u32) rate;
                 if (std::abs(average - closest) <= ERROR) {
                     common_rate = rate; break;
-                    misses = 0;
                 } else {
-                    misses += 1;
-                    if (misses > 1) common_rate = std::nullopt;
+                    common_rate = std::nullopt;
                 }
             }
         }
 
-        auto compatible_with_tick(u32 tick) const -> bool {
-            return estimated_hertz % tick == 0;
+        auto compatible_with_rate(u32 desired_rate) const -> bool {
+            return (common_rate ? (u32) *common_rate : estimated_hertz) % desired_rate == 0;
         }
 
-        /// Given the frame count and a target hertz makes an effort to invoke the provided callable
+        /// Given a frame count and a target hertz makes an effort to invoke the provided callable
         /// at a consistent rate in sync with the display, ideally by alternating frames on which
         /// it attempts to draw when the rate is divisible or close to it.
         ///
+        /// If the desired rate is incompatible and we can't evenly distribute frames it falls back on
+        /// floating point accumulation which should maintain an erroneous but better than nothing sync.
+        ///
+        /// If the rate falls below the desired rate the callable will always be invoked since we are
+        /// already failing to keep up and there is no way to provide a good experience anymore,
+        /// which will slow down.
+        ///
         /// Passing zero as the desired rate bypasses the lock.
         template <typename Fn> void sync(usize frame, u32 desired_rate, Fn f) const {
-            if (desired_rate == 0 or estimated_hertz < desired_rate) {
+            const u32 actual_hertz = common_rate ? (u32) *common_rate : estimated_hertz;
+
+            if (desired_rate == 0 or actual_hertz < desired_rate) {
                 f();
+            } else if (not compatible_with_rate(desired_rate)) {
+                const f64 actual_rate = common_rate ? (f64) *common_rate : (1000.0 / estimated_millis);
+
+                if (actual_rate < 1e-6) return; // avoid division by zero
+
+                const f64 increment = (f64) desired_rate / actual_rate;
+                phase += increment;
+
+                if (phase >= 1.0) {
+                    f();
+                    phase -= 1.0;
+                }
             } else {
-                const u32 tick_frames = (common_rate ? (u32) *common_rate : estimated_hertz)
-                    / (u32) desired_rate;
+                const u32 tick_frames = actual_hertz / desired_rate;
 
                 if (tick_frames != 0 and frame % tick_frames == 0) {
                     f();

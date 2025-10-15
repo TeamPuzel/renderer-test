@@ -13,7 +13,7 @@ class RayTracer final {
     RayTracer() {}
 
     void init(Io& io) {
-        static const auto background = raytracer::LambertMaterial(draw::color::pico::GRAY, .4f);
+        static const auto background = raytracer::LambertMaterial(draw::color::pico::DARK_GRAY, .4f);
 
         static const auto rough_dielectric
             = raytracer::BsdfMaterial({ .color = draw::color::pico::GRAY, .roughness = 1.f, .metallic = 0.f });
@@ -58,12 +58,12 @@ class RayTracer final {
 
         if (input.key_repeating(rt::Key::O, 30, 2)) world.set_fov(world.get_fov() + math::deg(1));
         if (input.key_repeating(rt::Key::P, 30, 2)) world.set_fov(world.get_fov() - math::deg(1));
-        if (input.key_pressed(rt::Key::I)) world.set_checkerboard(!world.get_checkerboard());
-        if (input.key_pressed(rt::Key::U)) world.set_shadows(!world.get_shadows());
+        if (input.key_pressed(rt::Key::I)) world.set_checkerboard(not world.get_checkerboard());
+        if (input.key_pressed(rt::Key::U)) world.set_shadows(not world.get_shadows());
         if (input.key_pressed(rt::Key::Y)) world.cycle_bsdf_mode();
 
-        if (input.key_pressed(rt::Key::Num6)) show_hud = !show_hud;
-        if (input.key_pressed(rt::Key::Num7)) show_info = !show_info;
+        if (input.key_pressed(rt::Key::Num6)) show_hud = not show_hud;
+        if (input.key_pressed(rt::Key::Num7)) show_info = not show_info;
 
         if (input.key_held(rt::Key::W) and not input.key_held(rt::Key::S))
             world.move({ 0.f, 0.f, +speed });

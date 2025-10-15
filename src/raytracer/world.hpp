@@ -454,14 +454,14 @@ namespace raytracer {
             const u32 thread_count = std::thread::hardware_concurrency();
             const i32 rows_per_thread = (height + thread_count - 1) / thread_count;
 
-            std::vector<std::thread> threads;
+            std::vector<std::jthread> threads;
             threads.reserve(thread_count);
 
             for (u32 t = 0; t < thread_count; t += 1) {
                 const i32 y_start = t * rows_per_thread;
                 const i32 y_end = std::min(height, y_start + rows_per_thread);
 
-                threads.emplace_back([&, y_start, y_end]() {
+                threads.emplace_back([&, y_start, y_end] {
                     for (i32 y = y_start; y < y_end; y += 1) {
                         for (i32 x = 0; x < width; x += 1) {
                             if (checkerboard and (x + y + input.counter()) % 2 == 0) continue;
@@ -483,8 +483,6 @@ namespace raytracer {
                     }
                 });
             }
-
-            for (auto& thread : threads) thread.join();
         }
     };
 }
