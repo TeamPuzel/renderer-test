@@ -367,4 +367,8 @@ namespace math {
 
         return result;
     }
+
+    template <std::floating_point T> constexpr auto mix(T lhs, T rhs, f32 t) -> T {
+        return lhs + t * (rhs - lhs);
+    }
 }

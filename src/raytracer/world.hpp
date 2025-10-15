@@ -11,6 +11,7 @@
 #include <span>
 #include <thread>
 #include <ranges>
+#include <random>
 
 namespace raytracer {
     /// A simple floating point color type.
@@ -250,7 +251,7 @@ namespace raytracer {
         math::Angle<f32> camera_yaw { 0.f };
         math::Angle<f32> camera_roll { 0.f };
 
-        draw::Color background_color { draw::color::BLACK };
+        raytracer::Color background_color { draw::color::BLACK };
 
         math::Angle<f32> fov { math::deg(80.f).radians() };
         bool checkerboard { true };
@@ -268,6 +269,10 @@ namespace raytracer {
 
         auto material(usize index) const -> Material const& {
             return *material_data[index];
+        }
+
+        auto get_background_color() const -> raytracer::Color {
+            return background_color;
         }
 
         /// Since objects are not guaranteed a stable address in memory, a reference type is provided
@@ -360,6 +365,12 @@ namespace raytracer {
             }
         }
 
+        auto random() const -> f32 {
+            static std::mt19937 rng;
+            static std::uniform_real_distribution<float> dist { 0.f, 1.f };
+            return dist(rng);
+        }
+
         [[gnu::const]]
         auto get_camera_position() const -> math::Vector<f32, 3> {
             return camera_position;
@@ -434,7 +445,58 @@ namespace raytracer {
                                 }
                             }
                         } else if constexpr (std::same_as<T, Mesh>) {
+                            using Matrix = math::Matrix<f32, 3, 3>;
+                            Matrix mesh_rotation =
+                                Matrix::rotation(Matrix::RotationAxis::Pitch, object.pitch) *
+                                Matrix::rotation(Matrix::RotationAxis::Yaw, object.yaw) *
+                                Matrix::rotation(Matrix::RotationAxis::Roll, object.roll);
 
+                            auto transform_vertex = [&](math::Vector<f32,3> v) -> math::Vector<f32,3> {
+                                return (v * object.scale) * mesh_rotation + object.position;
+                            };
+
+                            auto ray_triangle_hit = [&] (
+                                math::Vector<f32,3> orig,
+                                math::Vector<f32,3> dir,
+                                math::Vector<f32,3> v0,
+                                math::Vector<f32,3> v1,
+                                math::Vector<f32,3> v2
+                            ) -> std::optional<Hit> {
+                                constexpr f32 EPSILON = 1e-6f;
+                                math::Vector<f32,3> edge1 = v1 - v0;
+                                math::Vector<f32,3> edge2 = v2 - v0;
+                                math::Vector<f32,3> h = dir.cross(edge2);
+                                f32 a = edge1.dot(h);
+                                if (std::abs(a) < EPSILON) return std::nullopt;
+
+                                f32 f = 1.f / a;
+                                math::Vector<f32,3> s = orig - v0;
+                                f32 u = f * s.dot(h);
+                                if (u < 0.f || u > 1.f) return std::nullopt;
+
+                                math::Vector<f32,3> q = s.cross(edge1);
+                                f32 v = f * dir.dot(q);
+                                if (v < 0.f || u + v > 1.f) return std::nullopt;
+
+                                f32 t = f * edge2.dot(q);
+                                if (t > EPSILON) {
+                                    auto hit_point = orig + dir * t;
+                                    math::Vector<f32,3> normal = edge1.cross(edge2).normalized();
+                                    return Hit{ .origin = hit_point, .normal = normal, .distance = t, .material_index = material };
+                                }
+
+                                return std::nullopt;
+                            };
+
+                            for (auto const& face : object.faces) {
+                                auto v0 = transform_vertex(object.tris[face[0]]);
+                                auto v1 = transform_vertex(object.tris[face[1]]);
+                                auto v2 = transform_vertex(object.tris[face[2]]);
+
+                                if (auto h = ray_triangle_hit(origin, direction, v0, v1, v2)) {
+                                    if (not best_hit or h->distance < best_hit->distance) best_hit = *h;
+                                }
+                            }
                         }
                     },
                     shape

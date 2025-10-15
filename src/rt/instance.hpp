@@ -630,7 +630,7 @@ namespace rt {
                 for (auto const& [text, y] : lines) target | draw::draw(text, target.width() - 8 - greatest_width, y);
             };
 
-            rate.sync(frame, heuristic_rate_lock ? 60 : 0, [&]{
+            rate.sync(frame, heuristic_rate_lock ? 60 : 0, [&] {
                 input.poll();
 
                 { // Process runtime specific debug options.

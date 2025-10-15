@@ -14,7 +14,7 @@ auto LambertMaterial::shade(Hit hit, World const& world, u32 depth) const -> ray
         const auto half = (view_direction + light_direction).normalized();
 
         if (world.get_shadows()) [[likely]] {
-            const auto shadow_origin = hit.origin + hit.normal.normalized() * 1e-3f;
+            const auto shadow_origin = hit.origin + hit.normal.normalized() * 0.001f;
             if (auto shadow_hit = world.cast_ray(shadow_origin, light_direction))
                 if (shadow_hit->distance < distance_to_light) continue;
         }
@@ -37,11 +37,12 @@ auto BsdfMaterial::shade(Hit hit, World const& world, u32 depth) const -> raytra
     Vector out_color;
 
     const auto base_reflectivity = math::mix(Vector(.04f), base_color, metallic);
+    const auto view_direction = (world.get_camera_position() - hit.origin).normalized();
 
+    // Specular and diffuse pass.
     for (const auto light : world.lights()) {
         const auto light_direction = (light.position - hit.origin).normalized();
         const auto distance_to_light = (light.position - hit.origin).magnitude();
-        const auto view_direction = (world.get_camera_position() - hit.origin).normalized();
         const auto half = (view_direction + light_direction).normalized();
 
         const auto normal_distribution
@@ -93,6 +94,39 @@ auto BsdfMaterial::shade(Hit hit, World const& world, u32 depth) const -> raytra
             case BsdfMaterial::Mode::Microfacets:
                 out_color += microfacets;
                 break;
+        }
+    }
+
+    // Reflection pass.
+    if (depth < 4 and metallic > 0.f and (1.f - roughness) > 0.001f) {
+        const auto reflect_direction
+            = (-view_direction + hit.normal * (2.f * view_direction.dot(hit.normal))).normalized();
+        const auto reflect_origin = hit.origin + hit.normal * 0.001f;
+
+        if (auto next_hit = world.cast_ray(reflect_origin, reflect_direction)) {
+            auto reflected_color = world.material(next_hit->material_index).shade(*next_hit, world, depth + 1);
+
+            const auto reflection_strength = (1.f - roughness);
+
+            const auto specular = Vector(reflected_color).hadamard(
+                base_reflectivity + (Vector(1.f) - base_reflectivity) * std::pow(
+                    1.f - std::clamp(hit.normal.dot(view_direction), 0.f, 1.f),
+                    5.f
+                )
+            ).hadamard(math::mix(Vector(1.f), base_color, metallic));
+
+            out_color += specular * (metallic * reflection_strength);
+        } else {
+            const auto specular = Vector(world.get_background_color()).hadamard(
+                base_reflectivity + (Vector(1.f) - base_reflectivity) * std::pow(
+                    1.f - std::clamp(hit.normal.dot((world.get_camera_position() - hit.origin).normalized()), 0.f, 1.f),
+                    5.f
+                )
+            ).hadamard(math::mix(Vector(1.f), base_color, metallic));
+
+            const auto reflection_strength = (1.f - roughness);
+
+            out_color += specular * (metallic * reflection_strength);
         }
     }
 
