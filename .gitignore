@@ -1,0 +1,5 @@
+/build
+/build-cross
+.DS_Store
+/.idea
+/.cache
