@@ -8,12 +8,18 @@ class RayTracer final {
     raytracer::World world;
     bool show_info { true };
     bool show_hud { true };
+    raytracer::World::Ref<raytracer::Mesh> bunny;
 
   public:
     RayTracer() {}
 
     void init(Io& io) {
         static const auto background = raytracer::LambertMaterial(draw::color::pico::DARK_GRAY, .4f);
+
+        static const auto background_b
+            = raytracer::BsdfMaterial({ .color = { .2f, .2f, .2f }, .roughness = 1.f, .metallic = 0.f });
+        static const auto emissive
+            = raytracer::BsdfMaterial({ .color = { 1.f }, .emissive = { 1000.f } });
 
         static const auto rough_dielectric
             = raytracer::BsdfMaterial({ .color = draw::color::pico::GRAY, .roughness = 1.f, .metallic = 0.f });
@@ -28,11 +34,14 @@ class RayTracer final {
         static const auto smooth_metal
             = raytracer::BsdfMaterial({ .color = draw::color::pico::WHITE, .roughness = .1f, .metallic = 1.f });
 
-        world.add(raytracer::Plane { .position = {  0.f,  0.f, 10.f }, .normal = {  0.f,  0.f, -1.f } }, background);
-        world.add(raytracer::Plane { .position = {  0.f,  0.f,  0.f }, .normal = {  0.f,  1.f,  0.f } }, background);
-        world.add(raytracer::Plane { .position = {  0.f, 10.f,  0.f }, .normal = {  0.f, -1.f,  0.f } }, background);
-        world.add(raytracer::Plane { .position = {  5.f,  0.f,  0.f }, .normal = { -1.f,  0.f,  0.f } }, background);
-        world.add(raytracer::Plane { .position = { -5.f,  0.f,  0.f }, .normal = {  1.f,  0.f,  0.f } }, background);
+        static const auto rough_dielectric_red
+            = raytracer::BsdfMaterial({ .color = draw::color::pico::RED, .roughness = 1.f, .metallic = 0.f });
+
+        world.add(raytracer::Plane { .position = {  0.f,  0.f, 10.f }, .normal = {  0.f,  0.f, -1.f } }, background_b);
+        world.add(raytracer::Plane { .position = {  0.f,  0.f,  0.f }, .normal = {  0.f,  1.f,  0.f } }, background_b);
+        world.add(raytracer::Plane { .position = {  0.f, 10.f,  0.f }, .normal = {  0.f, -1.f,  0.f } }, emissive);
+        world.add(raytracer::Plane { .position = {  5.f,  0.f,  0.f }, .normal = { -1.f,  0.f,  0.f } }, background_b);
+        world.add(raytracer::Plane { .position = { -5.f,  0.f,  0.f }, .normal = {  1.f,  0.f,  0.f } }, background_b);
 
         world.add(raytracer::Sphere { .position = { -1.75f, 1.f, 0.f }, .radius = .75f }, rough_metal);
         world.add(raytracer::Sphere { .position = {    0.f, 1.f, 0.f }, .radius = .75f }, medium_metal);
@@ -45,9 +54,13 @@ class RayTracer final {
         world.add(raytracer::PointLight { .position = { -2.5f,  5.f, -5.f }, .color = {  1.f,  .8f, .45f } });
         world.add(raytracer::PointLight { .position = {  2.5f, 2.5f, -5.f }, .color = { .35f, .45f, .65f } });
 
-        // auto bunny = raytracer::load_mesh(io, "res/lowpoly_bunny.obj");
-        // bunny.position = { 0.f, 1.f, -2.f };
-        // world.add(std::move(bunny), medium_metal);
+        world.add(raytracer::Sphere { .position = {  3.25f, 1.f, -2.f }, .radius = .75f }, emissive);
+        world.add(raytracer::Sphere { .position = { -3.25f, 1.f, -2.f }, .radius = .75f }, rough_dielectric_red);
+
+        auto bunny = raytracer::load_mesh(io, "res/higherpoly_bunny.obj");
+        bunny.position = { 0.f, 0.f, -4.f };
+        bunny.scale = 10.f;
+        this->bunny = world.add(std::move(bunny), medium_metal);
 
         world.move({ 0.f, 3.f, -9.f });
     }
@@ -56,11 +69,14 @@ class RayTracer final {
         const f32 speed = input.key_held(rt::Key::Shift) ? 1.f : .2f;
         const math::Angle<f32> rotation_speed = math::deg(2.f);
 
+        bunny->yaw += math::deg(1);
+
         if (input.key_repeating(rt::Key::O, 30, 2)) world.set_fov(world.get_fov() + math::deg(1));
         if (input.key_repeating(rt::Key::P, 30, 2)) world.set_fov(world.get_fov() - math::deg(1));
         if (input.key_pressed(rt::Key::I)) world.set_checkerboard(not world.get_checkerboard());
         if (input.key_pressed(rt::Key::U)) world.set_shadows(not world.get_shadows());
         if (input.key_pressed(rt::Key::Y)) world.cycle_bsdf_mode();
+        if (input.key_pressed(rt::Key::T)) world.cycle_gi_mode();
 
         if (input.key_pressed(rt::Key::Num6)) show_hud = not show_hud;
         if (input.key_pressed(rt::Key::Num7)) show_info = not show_info;
@@ -104,6 +120,7 @@ class RayTracer final {
                 << "I: toggle checkerboard interlacing" << std::endl
                 << "U: toggle shadows" << std::endl
                 << "Y: cycle BSDF debug modes" << std::endl
+                << "T: cycle BSDF GI modes" << std::endl
                 << "W/S/A/D: move camera" << std::endl
                 << "Up/Down/Left/Right: rotate camera" << std::endl;
 
@@ -112,7 +129,8 @@ class RayTracer final {
                     << "Fov: " << i32(world.get_fov().degrees()) << " degrees" << std::endl
                     << "Checkerboard: " << (world.get_checkerboard() ? "Enabled" : "Disabled") << std::endl
                     << "Shadows: " << (world.get_shadows() ? "Enabled" : "Disabled") << std::endl
-                    << "BSDF mode: " << world.get_bsdf_mode() << std::endl;
+                    << "BSDF mode: " << world.get_bsdf_mode() << std::endl
+                    << "GI mode: " << world.get_gi_mode() << std::endl;
             }
 
             std::string line;

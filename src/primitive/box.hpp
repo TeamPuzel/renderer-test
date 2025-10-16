@@ -73,7 +73,7 @@ template <typename T> class Box final {
         return this->inner;
     }
 
-    constexpr operator bool() {
+    constexpr operator bool() const {
         return inner != nullptr;
     }
 

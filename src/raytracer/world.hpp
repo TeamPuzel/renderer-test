@@ -11,7 +11,6 @@
 #include <span>
 #include <thread>
 #include <ranges>
-#include <random>
 
 namespace raytracer {
     /// A simple floating point color type.
@@ -57,6 +56,14 @@ namespace raytracer {
         }
     };
 
+    struct Hit final {
+		math::Vector<f32, 3> origin;
+		math::Vector<f32, 3> normal;
+		f32 distance { std::numeric_limits<f32>::max() };
+
+		usize material_index { 0 };
+	};
+
     struct Sphere final {
         math::Vector<f32, 3> position;
         f32 radius;
@@ -68,7 +75,7 @@ namespace raytracer {
 
     struct Mesh final {
         math::Vector<f32, 3> position;
-        std::vector<math::Vector<f32, 3>> tris;
+        std::vector<math::Vector<f32, 3>> vertices;
         std::vector<std::array<usize, 3>> faces;
         f32 scale { 1.f };
         math::Angle<f32> pitch { 0.f };
@@ -79,20 +86,273 @@ namespace raytracer {
             Flat,
             Smooth
         } shading { Shading::Flat };
+
+        struct BvhNode final {
+            math::Vector<f32, 3> bound_min;
+            math::Vector<f32, 3> bound_max;
+
+            usize face_index;
+            usize face_count;
+
+            Box<BvhNode> left;
+            Box<BvhNode> right;
+        };
+
+        Box<BvhNode> bvh;
+
+      private:
+        static void compute_bounds(
+            std::span<const math::Vector<f32, 3>> vertices,
+            std::span<const std::array<usize, 3>> faces,
+            math::Vector<f32, 3>& out_min,
+            math::Vector<f32, 3>& out_max
+        ) {
+            using Vector = math::Vector<f32, 3>;
+            // Silly name because the preprocessor exists and defines INFINITY. I hate C++.
+            constexpr static f32 INF = std::numeric_limits<f32>::infinity();
+
+            out_min = {  INF,  INF,  INF };
+            out_max = { -INF, -INF, -INF };
+
+            for (auto const& face : faces) {
+                for (usize idx : face) {
+                    const auto& v = vertices[idx];
+                    for (i32 a = 0; a < 3; a += 1) {
+                        out_min[a] = std::min(out_min[a], v[a]);
+                        out_max[a] = std::max(out_max[a], v[a]);
+                    }
+                }
+            }
+        }
+
+        static auto partition_faces(
+            std::span<const math::Vector<f32, 3>> vertices,
+            std::span<std::array<usize, 3>> faces,
+            i32 axis,
+            f32 split
+        ) -> usize {
+            usize i = 0;
+            usize j = faces.size();
+
+            while (i < j) {
+                const auto& f = faces[i];
+                math::Vector<f32, 3> c = (vertices[f[0]] + vertices[f[1]] + vertices[f[2]]) / 3.f;
+
+                if (c[axis] < split) {
+                    i += 1;
+                } else {
+                    j -= 1;
+                    std::swap(faces[i], faces[j]);
+                }
+            }
+
+            return i;
+        }
+
+        static auto build_bvh(
+            std::span<const math::Vector<f32, 3>> vertices,
+            std::span<std::array<usize, 3>> faces,
+            usize face_offset,
+            usize leaf_size = 4
+        ) -> Box<Mesh::BvhNode> {
+            using Node = Mesh::BvhNode;
+            auto node = Box<Node>::make();
+
+            // Compute bounding box
+            compute_bounds(vertices, faces, node->bound_min, node->bound_max);
+
+            node->face_index = face_offset;
+            node->face_count = faces.size();
+
+            if (faces.size() <= leaf_size) return node;
+
+            // Choose axis with largest extent
+            math::Vector<f32, 3> extent = node->bound_max - node->bound_min;
+            i32 axis = 0;
+            if (extent[1] > extent[axis]) axis = 1;
+            if (extent[2] > extent[axis]) axis = 2;
+
+            f32 split = (node->bound_min[axis] + node->bound_max[axis]) * 0.5f;
+
+            // Partition in-place
+            usize mid = partition_faces(vertices, faces, axis, split);
+
+            // If partition fails (all on one side), make leaf
+            if (mid == 0 or mid == faces.size()) return node;
+
+            auto left_span  = faces.first(mid);
+            auto right_span = faces.last(faces.size() - mid);
+
+            node->left = build_bvh(vertices, left_span, face_offset, leaf_size);
+            node->right = build_bvh(vertices, right_span, face_offset + mid, leaf_size);
+
+            return node;
+        }
+
+      public:
+        void compute_bvh() {
+            if (faces.empty()) {
+                bvh = Box<BvhNode>();
+                return;
+            }
+            bvh = build_bvh(vertices, faces, 0);
+        }
+
+        static bool intersect_aabb(
+            math::Vector<f32, 3> const& origin,
+            math::Vector<f32, 3> const& dir_inv,
+            math::Vector<f32, 3> const& bmin,
+            math::Vector<f32, 3> const& bmax,
+            f32& tmin_out,
+            f32& tmax_out
+        ) {
+            f32 tmin = -std::numeric_limits<f32>::infinity();
+            f32 tmax =  std::numeric_limits<f32>::infinity();
+
+            for (int i = 0; i < 3; i++) {
+                f32 t0 = (bmin[i] - origin[i]) * dir_inv[i];
+                f32 t1 = (bmax[i] - origin[i]) * dir_inv[i];
+                if (t0 > t1) std::swap(t0, t1);
+
+                tmin = std::max(tmin, t0);
+                tmax = std::min(tmax, t1);
+
+                if (tmax < tmin) return false;
+            }
+
+            tmin_out = tmin;
+            tmax_out = tmax;
+            return true;
+        }
+
+        static std::optional<Hit> intersect_triangle(
+            math::Vector<f32, 3> const& origin,
+            math::Vector<f32, 3> const& dir,
+            math::Vector<f32, 3> const& v0,
+            math::Vector<f32, 3> const& v1,
+            math::Vector<f32, 3> const& v2
+        ) {
+            // Möller–Trumbore
+            constexpr f32 EPS = 1e-6f;
+            auto e1 = v1 - v0;
+            auto e2 = v2 - v0;
+
+            auto pvec = dir.cross(e2);
+            f32 det = e1.dot(pvec);
+            if (std::abs(det) < EPS) return std::nullopt;
+            f32 inv_det = 1.0f / det;
+
+            auto tvec = origin - v0;
+            f32 u = tvec.dot(pvec) * inv_det;
+            if (u < 0 || u > 1) return std::nullopt;
+
+            auto qvec = tvec.cross(e1);
+            f32 v = dir.dot(qvec) * inv_det;
+            if (v < 0 || u + v > 1) return std::nullopt;
+
+            f32 t = e2.dot(qvec) * inv_det;
+            if (t < EPS) return std::nullopt;
+
+            Hit hit;
+            hit.origin = origin + dir * t;
+            hit.normal = e1.cross(e2).normalized();
+            hit.distance = t;
+            return hit;
+        }
+
+        bool intersect_bvh(
+            BvhNode const* node,
+            math::Vector<f32, 3> const& origin,
+            math::Vector<f32, 3> const& dir,
+            math::Vector<f32, 3> const& dir_inv,
+            f32& best_distance,
+            Hit& best_hit
+        ) const {
+            f32 tmin, tmax;
+            if (!intersect_aabb(origin, dir_inv, node->bound_min, node->bound_max, tmin, tmax))
+                return false;
+
+            bool hit_any = false;
+
+            // Leaf node
+            if (!node->left && !node->right) {
+                for (usize i = 0; i < node->face_count; i++) {
+                    auto const& face = faces[node->face_index + i];
+                    auto const& v0 = vertices[face[0]];
+                    auto const& v1 = vertices[face[1]];
+                    auto const& v2 = vertices[face[2]];
+
+                    if (auto hit = intersect_triangle(origin, dir, v0, v1, v2)) {
+                        if (hit->distance < best_distance) {
+                            best_distance = hit->distance;
+                            best_hit = *hit;
+                            hit_any = true;
+                        }
+                    }
+                }
+            } else {
+                if (node->left)
+                    hit_any |= intersect_bvh(node->left.raw(), origin, dir, dir_inv, best_distance, best_hit);
+                if (node->right)
+                    hit_any |= intersect_bvh(node->right.raw(), origin, dir, dir_inv, best_distance, best_hit);
+            }
+
+            return hit_any;
+        }
+
+        math::Matrix<f32, 4, 4> local_to_world() const {
+            using Matrix = math::Matrix<f32, 4, 4>;
+
+            return Matrix::scaling(scale, scale, scale)
+                 * Matrix::rotation(Matrix::RotationAxis::Pitch, pitch)
+                 * Matrix::rotation(Matrix::RotationAxis::Yaw, yaw)
+                 * Matrix::rotation(Matrix::RotationAxis::Roll, roll)
+                 * Matrix::translation(position.x(), position.y(), position.z());
+        }
+
+        math::Matrix<f32, 4, 4> world_to_local() const {
+            return local_to_world().inverse();
+        }
+
+        auto intersect(math::Vector<f32, 3> origin, math::Vector<f32, 3> direction) const -> std::optional<Hit> {
+            if (not bvh) return std::nullopt;
+
+            auto world_to_local_mat = world_to_local();
+            math::Vector<f32, 4> o4 { origin,    1.f };
+            math::Vector<f32, 4> d4 { direction, 0.f };
+
+            auto local_origin = (o4 * world_to_local_mat);
+            auto local_dir    = (d4 * world_to_local_mat).normalized();
+            auto local_dir_inv = math::Vector<f32, 3>{
+                1.0f / local_dir[0],
+                1.0f / local_dir[1],
+                1.0f / local_dir[2]
+            };
+
+            f32 best_distance = std::numeric_limits<f32>::max();
+            Hit best_hit;
+
+            if (intersect_bvh(bvh.raw(), local_origin, local_dir, local_dir_inv, best_distance, best_hit)) {
+                // Convert hit point and normal back to world space
+                auto local_to_world_mat = local_to_world();
+                math::Vector<f32, 4> hit4 { best_hit.origin[0], best_hit.origin[1], best_hit.origin[2], 1.0f };
+                math::Vector<f32, 4> normal4 { best_hit.normal[0], best_hit.normal[1], best_hit.normal[2], 0.0f };
+
+                best_hit.origin = (hit4 * local_to_world_mat);
+                best_hit.normal = (normal4 * local_to_world_mat).normalized();
+                best_hit.distance = (best_hit.origin - origin).magnitude(); // length?
+
+                return best_hit;
+            }
+
+            return std::nullopt;
+        }
     };
 
     struct PointLight final {
         math::Vector<f32, 3> position;
         raytracer::Color color;
     };
-
-    struct Hit final {
-		math::Vector<f32, 3> origin;
-		math::Vector<f32, 3> normal;
-		f32 distance { std::numeric_limits<f32>::max() };
-
-		usize material_index { 0 };
-	};
 
 	class World;
 
@@ -139,18 +399,20 @@ namespace raytracer {
 
 	class BsdfMaterial final : public Material {
 	    raytracer::Color color;
+		raytracer::Color emissive;
 		f32 roughness;
 		f32 metallic;
 
 	  public:
 		struct Config final {
-		    raytracer::Color color { draw::color::pico::GRAY };
+		    raytracer::Color color { draw::color::BLACK };
+			raytracer::Color emissive { draw::color::BLACK };
 			f32 roughness { 1.f };
 			f32 metallic { 0.f };
 		};
 
 		constexpr explicit(false) BsdfMaterial(Config config)
-		    : color(config.color), roughness(config.roughness), metallic(config.metallic) {}
+		    : color(config.color), emissive(config.emissive), roughness(config.roughness), metallic(config.metallic) {}
 
 		auto shade(Hit hit, World const& world, u32 depth) const -> raytracer::Color override;
 
@@ -167,6 +429,10 @@ namespace raytracer {
 			NormalDistribution,
 			Microfacets
 		};
+
+		enum class GiMode {
+            None, Simple
+        };
 	};
 
 	constexpr std::ostream& operator<<(std::ostream& os, BsdfMaterial::Mode const& value) {
@@ -177,6 +443,15 @@ namespace raytracer {
             case BsdfMaterial::Mode::Fresnel:            os << "Fresnel";            break;
             case BsdfMaterial::Mode::NormalDistribution: os << "NormalDistribution"; break;
             case BsdfMaterial::Mode::Microfacets:        os << "Microfacets";        break;
+        }
+
+        return os;
+    }
+
+    constexpr std::ostream& operator<<(std::ostream& os, BsdfMaterial::GiMode const& value) {
+	    switch (value) {
+            case BsdfMaterial::GiMode::None:   os << "None";   break;
+            case BsdfMaterial::GiMode::Simple: os << "Simple"; break;
         }
 
         return os;
@@ -218,7 +493,7 @@ namespace raytracer {
 
             if (const auto id = next()) {
                 if (id == "v") {
-                    mesh.tris.emplace_back(
+                    mesh.vertices.emplace_back(
                         std::stof(std::string(next().value())),
                         std::stof(std::string(next().value())),
                         std::stof(std::string(next().value()))
@@ -234,6 +509,8 @@ namespace raytracer {
                 }
             }
         }
+
+        mesh.compute_bvh();
 
         return mesh;
     }
@@ -257,6 +534,7 @@ namespace raytracer {
         bool checkerboard { true };
         bool shadows { true };
         BsdfMaterial::Mode bsdf_mode { BsdfMaterial::Mode::Default };
+        BsdfMaterial::GiMode gi_mode { BsdfMaterial::GiMode::None };
 
       public:
         World() {
@@ -267,10 +545,15 @@ namespace raytracer {
             return light_data;
         }
 
+        auto objects() const -> std::span<const std::pair<Shape, usize>> {
+            return object_data;
+        }
+
         auto material(usize index) const -> Material const& {
             return *material_data[index];
         }
 
+        [[gnu::const]]
         auto get_background_color() const -> raytracer::Color {
             return background_color;
         }
@@ -290,6 +573,8 @@ namespace raytracer {
 
             auto operator*() const -> Object& { return std::get<Object>(world->object_data[index].first); }
             auto operator->() const -> Object* { return &std::get<Object>(world->object_data[index].first); }
+
+            operator bool () const { return world; }
         };
 
         template <any_of<Sphere, Plane, Mesh> Object, subtype<Material> Mat> auto add(Object object, Mat material) -> Ref<Object> {
@@ -301,7 +586,7 @@ namespace raytracer {
                 material_index = material_data.size() - 1;
             }
 
-            object_data.push_back({ object, material_index });
+            object_data.emplace_back(std::move(object), material_index);
             return { this, object_data.size() - 1 };
         }
 
@@ -365,10 +650,21 @@ namespace raytracer {
             }
         }
 
-        auto random() const -> f32 {
-            static std::mt19937 rng;
-            static std::uniform_real_distribution<float> dist { 0.f, 1.f };
-            return dist(rng);
+        void set_gi_mode(BsdfMaterial::GiMode value) {
+            gi_mode = value;
+        }
+
+        [[gnu::const]]
+        auto get_gi_mode() const -> BsdfMaterial::GiMode {
+            return gi_mode;
+        }
+
+        void cycle_gi_mode() {
+            using enum BsdfMaterial::GiMode;
+            switch (gi_mode) {
+                case None:   gi_mode = Simple; break;
+                case Simple: gi_mode = None;   break;
+            }
         }
 
         [[gnu::const]]
@@ -445,56 +741,10 @@ namespace raytracer {
                                 }
                             }
                         } else if constexpr (std::same_as<T, Mesh>) {
-                            using Matrix = math::Matrix<f32, 3, 3>;
-                            Matrix mesh_rotation =
-                                Matrix::rotation(Matrix::RotationAxis::Pitch, object.pitch) *
-                                Matrix::rotation(Matrix::RotationAxis::Yaw, object.yaw) *
-                                Matrix::rotation(Matrix::RotationAxis::Roll, object.roll);
-
-                            auto transform_vertex = [&](math::Vector<f32,3> v) -> math::Vector<f32,3> {
-                                return (v * object.scale) * mesh_rotation + object.position;
-                            };
-
-                            auto ray_triangle_hit = [&] (
-                                math::Vector<f32,3> orig,
-                                math::Vector<f32,3> dir,
-                                math::Vector<f32,3> v0,
-                                math::Vector<f32,3> v1,
-                                math::Vector<f32,3> v2
-                            ) -> std::optional<Hit> {
-                                constexpr f32 EPSILON = 1e-6f;
-                                math::Vector<f32,3> edge1 = v1 - v0;
-                                math::Vector<f32,3> edge2 = v2 - v0;
-                                math::Vector<f32,3> h = dir.cross(edge2);
-                                f32 a = edge1.dot(h);
-                                if (std::abs(a) < EPSILON) return std::nullopt;
-
-                                f32 f = 1.f / a;
-                                math::Vector<f32,3> s = orig - v0;
-                                f32 u = f * s.dot(h);
-                                if (u < 0.f || u > 1.f) return std::nullopt;
-
-                                math::Vector<f32,3> q = s.cross(edge1);
-                                f32 v = f * dir.dot(q);
-                                if (v < 0.f || u + v > 1.f) return std::nullopt;
-
-                                f32 t = f * edge2.dot(q);
-                                if (t > EPSILON) {
-                                    auto hit_point = orig + dir * t;
-                                    math::Vector<f32,3> normal = edge1.cross(edge2).normalized();
-                                    return Hit{ .origin = hit_point, .normal = normal, .distance = t, .material_index = material };
-                                }
-
-                                return std::nullopt;
-                            };
-
-                            for (auto const& face : object.faces) {
-                                auto v0 = transform_vertex(object.tris[face[0]]);
-                                auto v1 = transform_vertex(object.tris[face[1]]);
-                                auto v2 = transform_vertex(object.tris[face[2]]);
-
-                                if (auto h = ray_triangle_hit(origin, direction, v0, v1, v2)) {
-                                    if (not best_hit or h->distance < best_hit->distance) best_hit = *h;
+                            if (auto hit = object.intersect(origin, direction)) {
+                                if (not best_hit or hit->distance < best_hit->distance) {
+                                    hit->material_index = material;
+                                    best_hit = hit;
                                 }
                             }
                         }

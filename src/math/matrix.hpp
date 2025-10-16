@@ -289,6 +289,38 @@ namespace math {
             });
         }
 
+        constexpr auto inverse() const -> Matrix requires (W == H) {
+            Matrix result = identity();
+            Matrix copy = *this;
+
+            // Perform Gauss-Jordan elimination
+            for (usize i = 0; i < W; i += 1) {
+                // Find pivot
+                Element pivot = copy.data[i][i];
+                if (pivot == 0) {
+                    return { std::numeric_limits<Element>::quiet_NaN() };
+                }
+
+                // Normalize the pivot row
+                for (usize j = 0; j < W; j += 1) {
+                    copy.data[i][j] /= pivot;
+                    result.data[i][j] /= pivot;
+                }
+
+                // Eliminate other rows
+                for (usize k = 0; k < W; k += 1) {
+                    if (k == i) continue;
+                    Element factor = copy.data[k][i];
+                    for (usize j = 0; j < W; j += 1) {
+                        copy.data[k][j] -= factor * copy.data[i][j];
+                        result.data[k][j] -= factor * result.data[i][j];
+                    }
+                }
+            }
+
+            return result;
+        }
+
         constexpr auto operator [] (usize x, usize y) & -> Element& { return this->data[x][y]; }
         constexpr auto operator [] (usize x, usize y) const& -> Element const& { return this->data[x][y]; }
 
@@ -299,7 +331,7 @@ namespace math {
 
         /// Vector constructor
         constexpr explicit Matrix(Element const(&values)[W]) requires (H == 1) {
-            for (int i = 0; i < W; i += 1)
+            for (i32 i = 0; i < W; i += 1)
                 this->data[i][0] = values[i];
         }
 
@@ -307,8 +339,24 @@ namespace math {
         template <std::convertible_to<Element>... Ts>
         constexpr explicit(false) Matrix(Ts... elements) requires (H == 1 and W == sizeof...(Ts)) {
             const Element values[] = { elements... };
-            for (int i = 0; i < W; i += 1)
+            for (i32 i = 0; i < W; i += 1)
                 this->data[i][0] = values[i];
+        }
+
+        template <const usize W2>
+        constexpr Matrix(Matrix<T, W2, 1> truncating) requires (W < W2) {
+            for (i32 i = 0; i < W; i += 1)
+                this->data[i][0] = truncating[i];
+        }
+
+        template <const usize W2, std::convertible_to<Element>... Ts>
+        constexpr Matrix(Matrix<T, W2, 1> extending, Ts... rest) requires (W == W2 + sizeof...(Ts)) {
+            for (i32 i = 0; i < W; i += 1)
+                this->data[i][0] = extending[i];
+
+            Element r[] = { static_cast<T>(rest)... };
+            for (i32 i = 0; i < sizeof...(Ts); i += 1)
+                this->data[W2 + i][0] = r[i];
         }
 
         constexpr auto operator [] (usize index) & -> Element& requires (H == 1) {
@@ -349,6 +397,16 @@ namespace math {
         constexpr auto normalized(this Vector const& self) -> Vector {
             Element m = self.magnitude();
             Vector result; for (usize i = 0; i < W; i += 1) result[i] = self[i] / m; return result;
+        }
+
+        constexpr auto map(this Matrix const& self, auto&& fn) -> Matrix {
+            Matrix result;
+
+            for (usize i = 0; i < H; i += 1)
+                for (usize j = 0; j < W; j += 1)
+                    result.data[i][j] = fn(self.data[i][j]);
+
+            return result;
         }
     };
 
