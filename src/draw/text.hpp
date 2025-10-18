@@ -7,6 +7,7 @@
 #include <primitive>
 #include <string_view>
 #include <optional>
+#include <ranges>
 #include "color.hpp"
 #include "plane.hpp"
 #include "image.hpp"
@@ -129,4 +130,100 @@ namespace draw {
     template <typename T> Text(char const*, Font<T, char>, Color = color::WHITE) -> Text<T, std::string_view>;
 
     static_assert(SizedPlane<Text<Image>>);
+
+    // TODO: Alignment
+    template <Plane T, typename Str = std::string_view> struct MultilineText final {
+        using StringView = Str;
+        using Char = typename Str::value_type;
+
+        StringView content;
+        Color color;
+        Font<T, Char> font;
+
+      private:
+        i32 width_cache;
+        i32 height_cache;
+        mutable std::optional<Image> cache;
+
+        decltype(auto) lines() const {
+            return content
+                | std::views::split('\n')
+                | std::views::transform([](auto&& r) {
+                    return StringView(&*r.begin(), usize(std::ranges::distance(r)));
+                });
+        }
+
+        auto line_width(StringView line) const -> i32 {
+            if (line.empty()) return 0;
+            i32 w = -font.spacing;
+            for (Char c : line)
+                w += font.symbol(c).width() + font.spacing;
+            return w;
+        }
+
+        auto redraw() const -> Image {
+            using SymbolType = typename Symbol<T>::Type;
+            Image ret(width_cache, height_cache);
+
+            i32 cursor_y = 0;
+            for (auto line : lines()) {
+                i32 cursor_x = 0;
+                for (Char c : line) {
+                    auto sym = font.symbol(c);
+                    switch (sym.type) {
+                        case SymbolType::Glyph:
+                            ret | draw(
+                                sym.glyph | draw::map([this] (Color px, i32, i32) -> Color {
+                                    return px == color::WHITE ? color : px;
+                                }),
+                                cursor_x, cursor_y,
+                                blend::overwrite
+                            );
+                            cursor_x += sym.width() + font.spacing;
+                            break;
+                        case SymbolType::Space:
+                            cursor_x += sym.space.width;
+                            break;
+                    }
+                }
+                cursor_y += font.height + font.leading;
+            }
+
+            return ret;
+        }
+
+      public:
+        MultilineText(StringView content, Font<T, Char> font, Color color = color::WHITE)
+            : content(content), color(color), font(font)
+        {
+            i32 max_width = 0;
+            i32 line_count = 0;
+            for (auto line : lines()) {
+                max_width = std::max(max_width, line_width(line));
+                line_count += 1;
+            }
+
+            width_cache = max_width;
+            height_cache = line_count == 0
+                ? 0
+                : line_count * font.height + (line_count - 1) * font.leading;
+        }
+
+        auto width() const -> i32 {
+            return width_cache;
+        }
+
+        auto height() const -> i32 {
+            return height_cache;
+        }
+
+        auto get(i32 x, i32 y) const -> Color {
+            if (not cache) cache = redraw();
+            return cache->get(x, y);
+        }
+    };
+
+    template <typename T> MultilineText(char const*, Font<T, char>, Color = color::WHITE) -> MultilineText<T, std::string_view>;
+
+    static_assert(SizedPlane<MultilineText<Image>>);
 }

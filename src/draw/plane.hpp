@@ -67,6 +67,8 @@
 #include <primitive>
 #include <utility>
 #include <algorithm>
+#include <vector>
+#include <thread>
 #include "color.hpp"
 
 namespace draw {
@@ -312,6 +314,44 @@ namespace draw {
                 return self;
             }
         };
+
+        template <SizedPlane D, typename Blend> struct ThreadedDraw final {
+            D const& drawable;
+            i32 x, y;
+            Blend blend_mode;
+
+            constexpr ThreadedDraw(D const& drawable, i32 x, i32 y, Blend blend_mode)
+                : drawable(drawable), x(x), y(y), blend_mode(blend_mode) {}
+
+            template <typename T> constexpr T& operator()(T& self) const requires SizedPlane<T> and MutablePlane<T> {
+                const auto width = drawable.width();
+                const auto height = drawable.height();
+
+                const u32 thread_count = std::thread::hardware_concurrency();
+                const i32 rows_per_thread = (height + thread_count - 1) / thread_count;
+
+                std::vector<std::jthread> threads;
+                threads.reserve(thread_count);
+
+                for (u32 t = 0; t < thread_count; t += 1) {
+                    const i32 y_start = t * rows_per_thread;
+                    const i32 y_end = std::min(height, y_start + rows_per_thread);
+
+                    threads.emplace_back([&, y_start, y_end] {
+                        for (i32 y = y_start; y < y_end; y += 1) {
+                            for (i32 x = 0; x < width; x += 1) {
+                                self.set(
+                                    x + this->x, y + this->y,
+                                    drawable.get(x, y).blend_over(self.get(x + this->x, y + this->y), blend_mode)
+                                );
+                            }
+                        }
+                    });
+                }
+
+                return self;
+            }
+        };
     }
 
     constexpr adapt::Clear clear(Color color = color::CLEAR) {
@@ -332,6 +372,22 @@ namespace draw {
 
     template <typename D> constexpr adapt::Draw<D, decltype(&blend::binary)> draw(D const& drawable, i32 x, i32 y) {
         return adapt::Draw { drawable, x, y, blend::binary };
+    }
+
+    template <typename D> constexpr adapt::Draw<D, decltype(&blend::binary)> draw(D const& drawable) {
+        return adapt::Draw { drawable, 0, 0, blend::binary };
+    }
+
+    template <SizedPlane D, typename Blend> constexpr adapt::ThreadedDraw<D, Blend> draw_threaded(D const& drawable, i32 x, i32 y, Blend blend_mode) {
+        return adapt::ThreadedDraw { drawable, x, y, blend_mode };
+    }
+
+    template <typename D> constexpr adapt::ThreadedDraw<D, decltype(&blend::binary)> draw_threaded(D const& drawable, i32 x, i32 y) {
+        return adapt::ThreadedDraw { drawable, x, y, blend::binary };
+    }
+
+    template <typename D> constexpr adapt::ThreadedDraw<D, decltype(&blend::binary)> draw_threaded(D const& drawable) {
+        return adapt::ThreadedDraw { drawable, 0, 0, blend::binary };
     }
 
     constexpr adapt::Line line(i32 sx, i32 sy, i32 dx, i32 dy, Color color = color::WHITE) {
@@ -665,6 +721,16 @@ namespace draw {
 
 // Abstract ------------------------------------------------------------------------------------------------------------
 namespace draw {
+    template <typename F> struct Generator final {
+        F fn;
+
+        constexpr Generator(F&& fn) : fn(fn) {}
+
+        constexpr auto get(i32 x, i32 y) const noexcept(noexcept(fn(x, y))) -> Color {
+            return fn(x, y);
+        }
+    };
+
     template <SizedPlane T> struct Repeat final {
         T inner;
 

@@ -378,6 +378,18 @@ namespace math {
         [[nodiscard]] auto w() & -> Element& requires (H == 1 and W >= 4) { return this->data[3][0]; }
         [[nodiscard]] auto w() const& -> Element const& requires (H == 1 and W >= 4) { return this->data[3][0]; }
 
+        [[nodiscard]] auto r() & -> Element& requires (H == 1 and W >= 1) { return this->data[0][0]; }
+        [[nodiscard]] auto r() const& -> Element const& requires (H == 1 and W >= 1) { return this->data[0][0]; }
+
+        [[nodiscard]] auto g() & -> Element& requires (H == 1 and W >= 2) { return this->data[1][0]; }
+        [[nodiscard]] auto g() const& -> Element const& requires (H == 1 and W >= 2) { return this->data[1][0]; }
+
+        [[nodiscard]] auto b() & -> Element& requires (H == 1 and W >= 3) { return this->data[2][0]; }
+        [[nodiscard]] auto b() const& -> Element const& requires (H == 1 and W >= 3) { return this->data[2][0]; }
+
+        [[nodiscard]] auto a() & -> Element& requires (H == 1 and W >= 4) { return this->data[3][0]; }
+        [[nodiscard]] auto a() const& -> Element const& requires (H == 1 and W >= 4) { return this->data[3][0]; }
+
         constexpr auto dot(this Vector const& self, Vector const& other) -> Element {
             Element acc = 0; for (usize i = 0; i < W; i += 1) acc += self[i] * other[i]; return acc;
         }

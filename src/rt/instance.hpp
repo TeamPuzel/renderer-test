@@ -619,15 +619,8 @@ namespace rt {
                     << "Scale: " << scale << 'x' << std::endl
                     << "Resolution: " << target.width() << 'x' << target.height() << std::endl;
 
-                std::string line;
-                std::vector<std::pair<draw::Text<draw::Ref<const draw::Image>, std::string>, i32>> lines;
-                for (i32 y = 8; std::getline(out, line); y += font::mine(io).height + font::mine(io).leading) {
-                    lines.emplace_back(draw::Text(line, font::mine(io)), y);
-                }
-
-                i32 greatest_width = 0;
-                for (auto const& [text, y] : lines) if (text.width() > greatest_width) greatest_width = text.width();
-                for (auto const& [text, y] : lines) target | draw::draw(text, target.width() - 8 - greatest_width, y);
+                draw::MultilineText text { out.str(), font::mine(io) };
+                target | draw::draw(text, target.width() - text.width() - 8, 8);
             };
 
             rate.sync(frame, heuristic_rate_lock ? 60 : 0, [&] {

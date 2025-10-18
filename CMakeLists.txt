@@ -1,3 +1,5 @@
+option(ENABLE_VULKAN_SUPPORT "Enable Vulkan renderer" OFF)
+
 set(CMAKE_C_COMPILER clang)
 set(CMAKE_CXX_COMPILER clang++)
 
@@ -11,6 +13,10 @@ if (NOT CMAKE_CXX_COMPILER_FRONTEND_VARIANT MATCHES "MSVC")
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wall -g -Wno-unused -Wpedantic -Wno-logical-op-parentheses")
     set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -ftrivial-auto-var-init=pattern")
     set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O3")
+
+    if (ENABLE_VULKAN_SUPPORT)
+        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DENABLE_VULKAN_SUPPORT")
+    endif()
 endif()
 
 if (${CMAKE_SYSTEM_NAME} STREQUAL "Windows")
@@ -21,13 +27,26 @@ endif()
 # Depencencies ---------------------------------------------------------------------------------------------------------
 
 find_package(SDL3 REQUIRED)
+if (ENABLE_VULKAN_SUPPORT)
+    find_package(Vulkan REQUIRED)
+endif()
+
+# Targets --------------------------------------------------------------------------------------------------------------
 
 file(GLOB_RECURSE RAYTRACER_SOURCES CONFIGURE_DEPENDS src/*.cpp)
 file(GLOB_RECURSE RAYTRACER_HEADERS CONFIGURE_DEPENDS src/*.hpp)
 
 add_executable(raytracer ${RAYTRACER_SOURCES} ${RAYTRACER_HEADERS})
-target_link_libraries(raytracer PRIVATE SDL3::SDL3)
 target_include_directories(raytracer PRIVATE include)
+target_link_libraries(raytracer PRIVATE SDL3::SDL3)
+
+if (ENABLE_VULKAN_SUPPORT)
+    if (NOT ${CMAKE_SYSTEM_NAME} STREQUAL "Darwin")
+        target_link_libraries(raytracer PRIVATE Vulkan::Vulkan)
+    else()
+        target_link_libraries(raytracer PRIVATE /opt/homebrew/Cellar/molten-vk/1.4.0/lib/libMoltenVK.dylib)
+    endif()
+endif()
 
 # Resources ------------------------------------------------------------------------------------------------------------
 

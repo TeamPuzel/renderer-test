@@ -9,8 +9,11 @@
 #include <concepts>
 #include <vector>
 #include <span>
-#include <thread>
 #include <ranges>
+
+#ifdef ENABLE_VULKAN_SUPPORT
+#include <vulkan/vulkan.hpp>
+#endif
 
 namespace raytracer {
     /// A simple floating point color type.
@@ -209,7 +212,7 @@ namespace raytracer {
             f32 tmin = -std::numeric_limits<f32>::infinity();
             f32 tmax =  std::numeric_limits<f32>::infinity();
 
-            for (int i = 0; i < 3; i++) {
+            for (i32 i = 0; i < 3; i += 1) {
                 f32 t0 = (bmin[i] - origin[i]) * dir_inv[i];
                 f32 t1 = (bmax[i] - origin[i]) * dir_inv[i];
                 if (t0 > t1) std::swap(t0, t1);
@@ -541,8 +544,13 @@ namespace raytracer {
             material_data.push_back(Box<SolidColorMaterial>::make(SolidColorMaterial(draw::color::pico::RED)));
         }
 
+        World(World const&) = delete;
+        World(World&&) = default;
+        World& operator=(World const&) = delete;
+        World& operator=(World&&) = default;
+
         auto lights() const -> std::span<const PointLight> {
-            return light_data;
+          return light_data;
         }
 
         auto objects() const -> std::span<const std::pair<Shape, usize>> {
@@ -763,38 +771,113 @@ namespace raytracer {
             const i32 height = target.height();
             const auto rotation_matrix = this->rotation_matrix();
 
-            const u32 thread_count = std::thread::hardware_concurrency();
-            const i32 rows_per_thread = (height + thread_count - 1) / thread_count;
+            // This is intended for functional programming of 2d graphics but works to parallelize
+            // the raytracer as well, especially nice since std::execution is not a thing in clang.
+            // C++ is a sad language, what use is a "standard" if not one implementation is actually complete?
+            // Anyhow, this can be made single threaded by using the normal draw::draw adapter, feel free to try.
+            // Just remove the _threaded part.
+            target | draw::draw_threaded(
+                draw::Generator { [&] (i32 x, i32 y) -> draw::Color {
+                    if (checkerboard and (x + y + input.counter()) % 2 == 0) return draw::color::CLEAR;
 
-            std::vector<std::jthread> threads;
-            threads.reserve(thread_count);
+                    const f32 ndc_x = (2.f * (x + .5f) / width - 1.f) * aspect;
+                    const f32 ndc_y = (1.f - 2.f * (y + .5f) / height);
 
-            for (u32 t = 0; t < thread_count; t += 1) {
-                const i32 y_start = t * rows_per_thread;
-                const i32 y_end = std::min(height, y_start + rows_per_thread);
+                    const f32 px = ndc_x * half_fov_tan;
+                    const f32 py = ndc_y * half_fov_tan;
 
-                threads.emplace_back([&, y_start, y_end] {
-                    for (i32 y = y_start; y < y_end; y += 1) {
-                        for (i32 x = 0; x < width; x += 1) {
-                            if (checkerboard and (x + y + input.counter()) % 2 == 0) continue;
+                    math::Vector<f32, 3> forward_ray_dir = { px, py, 1.f };
+                    forward_ray_dir = forward_ray_dir.normalized();
+                    const auto ray_dir = forward_ray_dir * rotation_matrix;
 
-                            const f32 ndc_x = (2.f * (x + .5f) / width - 1.f) * aspect;
-                            const f32 ndc_y = (1.f - 2.f * (y + .5f) / height);
-
-                            const f32 px = ndc_x * half_fov_tan;
-                            const f32 py = ndc_y * half_fov_tan;
-
-                            math::Vector<f32, 3> forward_ray_dir = { px, py, 1.f };
-                            forward_ray_dir = forward_ray_dir.normalized();
-                            const auto ray_dir = forward_ray_dir * rotation_matrix;
-
-                            if (const auto hit = cast_ray(camera_position, ray_dir)) {
-                                target | draw::pixel(x, y, material_data[hit->material_index]->shade(*hit, *this, 0));
-                            }
-                        }
+                    if (const auto hit = cast_ray(camera_position, ray_dir)) {
+                        return material_data[hit->material_index]->shade(*hit, *this, 0);
+                    } else {
+                        return draw::color::CLEAR;
                     }
-                });
-            }
+                } }
+                | draw::slice(0, 0, width, height) // Generators are infinite, we only want the area overlapping the target.
+            );
         }
+
+// Note that the Vulkan implementation is incomplete and does not do anything yet.
+#ifdef ENABLE_VULKAN_SUPPORT
+      private:
+        vk::UniqueInstance vk_instance;
+        vk::UniqueDevice vk_device;
+        vk::Queue vk_queue;
+        vk::UniqueShaderModule vk_shader_module;
+
+        mutable u32 vk_buffer_width  = 0;
+        mutable u32 vk_buffer_height = 0;
+
+        void init_vulkan(Io& io) {
+            vk::ApplicationInfo app_info {
+                "Raytracer", 1,
+                "Puzel", 1,
+                VK_API_VERSION_1_4
+            };
+
+            std::array layers = { "VK_LAYER_KHRONOS_validation" };
+
+            vk::InstanceCreateInfo create_info {
+                vk::InstanceCreateFlagBits::eEnumeratePortabilityKHR,
+                &app_info,
+                layers.size(),
+                layers.data()
+            };
+
+            vk_instance = vk::createInstanceUnique(create_info);
+
+            std::vector<vk::PhysicalDevice> devices = vk_instance->enumeratePhysicalDevices();
+            if (devices.empty()) throw std::runtime_error("No physical devices found");
+
+            vk::PhysicalDevice physical_device;
+            u32 compute_queue_family_index = std::numeric_limits<u32>::max();
+
+            for (auto& dev : devices) {
+                auto queueFamilies = dev.getQueueFamilyProperties();
+                for (u32 i = 0; i < queueFamilies.size(); i += 1) {
+                    if (queueFamilies[i].queueFlags & vk::QueueFlagBits::eCompute) {
+                        physical_device = dev;
+                        compute_queue_family_index = i;
+                        goto end_device_loop;
+                    }
+                }
+            }
+          end_device_loop:
+            if (not physical_device) throw std::runtime_error("No suitable compute device found");
+
+            f32 priority = 1.f;
+            vk::DeviceQueueCreateInfo queue_create_info { {}, compute_queue_family_index, 1, &priority };
+
+            vk::DeviceCreateInfo device_info;
+            device_info.queueCreateInfoCount = 1;
+            device_info.pQueueCreateInfos = &queue_create_info;
+
+            vk_device = physical_device.createDeviceUnique(device_info);
+            vk_queue = vk_device->getQueue(compute_queue_family_index, 0);
+
+            auto shader = io.read_file("res/bsdf.comp.spv");
+            vk::ShaderModuleCreateInfo shader_info { {}, shader.size(), (u32 const*) shader.data() };
+            vk_shader_module = vk_device->createShaderModuleUnique(shader_info);
+        }
+
+      public:
+        void draw_vulkan(Io& io, rt::Input const& input, draw::Ref<draw::Image> target) const {
+            World& self = *const_cast<World*>(this); // Hack to do some interior mutability conveniently.
+
+            if (not vk_instance) self.init_vulkan(io);
+
+
+        }
+#else
+        void draw_vulkan(Io& io, rt::Input const& input, draw::Ref<draw::Image> target) const {
+            auto message = draw::Text("Vulkan support not compiled", font::mine(io), draw::color::pico::RED);
+            target
+                | draw::clear(draw::color::BLACK)
+                | draw::draw(message, target.width() - message.width() - 8, target.height() - message.height() - 8);
+        }
+#endif
     };
 }

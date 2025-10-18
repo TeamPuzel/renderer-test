@@ -8,6 +8,7 @@ class RayTracer final {
     raytracer::World world;
     bool show_info { true };
     bool show_hud { true };
+    bool use_vulkan { false };
     raytracer::World::Ref<raytracer::Mesh> bunny;
 
   public:
@@ -77,6 +78,7 @@ class RayTracer final {
         if (input.key_pressed(rt::Key::U)) world.set_shadows(not world.get_shadows());
         if (input.key_pressed(rt::Key::Y)) world.cycle_bsdf_mode();
         if (input.key_pressed(rt::Key::T)) world.cycle_gi_mode();
+        if (input.key_pressed(rt::Key::V)) use_vulkan = not use_vulkan;
 
         if (input.key_pressed(rt::Key::Num6)) show_hud = not show_hud;
         if (input.key_pressed(rt::Key::Num7)) show_info = not show_info;
@@ -106,37 +108,38 @@ class RayTracer final {
     }
 
     void draw(Io& io, rt::Input const& input, draw::Ref<draw::Image> target) const {
-        world.draw(io, input, target);
+        use_vulkan
+            ? world.draw_vulkan(io, input, target)
+            : world.draw(io, input, target);
 
         if (show_hud) {
             std::stringstream out;
-            out << "6: toggle hud" << std::endl
-                << "7: toggle info" << std::endl
-                << "8: toggle rate lock" << std::endl
-                << "9: toggle performance overlay" << std::endl
-                << "0: toggle vsync" << std::endl
-                << "+/-: adjust target scale" << std::endl
-                << "O/P: adjust fov" << std::endl
+            out << "6: toggle hud"                      << std::endl
+                << "7: toggle info"                     << std::endl
+                << "8: toggle rate lock"                << std::endl
+                << "9: toggle performance overlay"      << std::endl
+                << "0: toggle vsync"                    << std::endl
+                << "+/-: adjust target scale"           << std::endl
+                << "O/P: adjust fov"                    << std::endl
                 << "I: toggle checkerboard interlacing" << std::endl
-                << "U: toggle shadows" << std::endl
-                << "Y: cycle BSDF debug modes" << std::endl
-                << "T: cycle BSDF GI modes" << std::endl
-                << "W/S/A/D: move camera" << std::endl
-                << "Up/Down/Left/Right: rotate camera" << std::endl;
+                << "U: toggle shadows"                  << std::endl
+                << "Y: cycle BSDF debug modes"          << std::endl
+                << "T: cycle BSDF GI modes"             << std::endl
+                << "V: toggle renderer"                 << std::endl
+                << "W/S/A/D: move camera"               << std::endl
+                << "Up/Down/Left/Right: rotate camera"  << std::endl;
 
             if (show_info) {
                 out << std::endl
-                    << "Fov: " << i32(world.get_fov().degrees()) << " degrees" << std::endl
+                    << "Renderer: "     << (use_vulkan ? "Vulkan" : "Software")                << std::endl
+                    << "Fov: "          << i32(world.get_fov().degrees()) << " degrees"        << std::endl
                     << "Checkerboard: " << (world.get_checkerboard() ? "Enabled" : "Disabled") << std::endl
-                    << "Shadows: " << (world.get_shadows() ? "Enabled" : "Disabled") << std::endl
-                    << "BSDF mode: " << world.get_bsdf_mode() << std::endl
-                    << "GI mode: " << world.get_gi_mode() << std::endl;
+                    << "Shadows: "      << (world.get_shadows() ? "Enabled" : "Disabled")      << std::endl
+                    << "BSDF mode: "    << world.get_bsdf_mode()                               << std::endl
+                    << "GI mode: "      << world.get_gi_mode()                                 << std::endl;
             }
 
-            std::string line;
-            for (i32 y = 8; std::getline(out, line); y += font::mine(io).height + font::mine(io).leading) {
-                target | draw::draw(draw::Text(line, font::mine(io)), 8, y);
-            }
+            target | draw::draw(draw::MultilineText(out.str(), font::mine(io)), 8, 8);
         }
     }
 };
