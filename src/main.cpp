@@ -58,7 +58,7 @@ class RayTracer final {
         world.add(raytracer::Sphere { .position = {  3.25f, 1.f, -2.f }, .radius = .75f }, emissive);
         world.add(raytracer::Sphere { .position = { -3.25f, 1.f, -2.f }, .radius = .75f }, rough_dielectric_red);
 
-        auto bunny = raytracer::load_mesh(io, "res/higherpoly_bunny.obj");
+        auto bunny = raytracer::load_mesh(io, "res/smooth_bunny.obj");
         bunny.position = { 0.f, 0.f, -4.f };
         bunny.scale = 10.f;
         this->bunny = world.add(std::move(bunny), medium_metal);

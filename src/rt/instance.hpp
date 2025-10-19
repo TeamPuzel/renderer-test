@@ -19,6 +19,7 @@
 /// An implemenation of Io purely in terms of SDL3. This is very convenient because we don't need
 /// to depend on the standard library or the operating system in SDL3 based projects.
 class SdlIo final : public Io {
+  public:
     class Error final : public Io::Error, public std::exception {
         std::string reason { SDL_GetError() };
       public:
@@ -29,6 +30,7 @@ class SdlIo final : public Io {
         }
     };
 
+  private:
     auto perform_read_file(char const* path) -> std::vector<u8> override {
         usize count;
         const auto data = (u8*) SDL_LoadFile(path, &count);

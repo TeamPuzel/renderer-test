@@ -41,11 +41,7 @@ target_include_directories(raytracer PRIVATE include)
 target_link_libraries(raytracer PRIVATE SDL3::SDL3)
 
 if (ENABLE_VULKAN_SUPPORT)
-    if (NOT ${CMAKE_SYSTEM_NAME} STREQUAL "Darwin")
-        target_link_libraries(raytracer PRIVATE Vulkan::Vulkan)
-    else()
-        target_link_libraries(raytracer PRIVATE /opt/homebrew/Cellar/molten-vk/1.4.0/lib/libMoltenVK.dylib)
-    endif()
+    target_link_libraries(raytracer PRIVATE Vulkan::Vulkan)
 endif()
 
 # Resources ------------------------------------------------------------------------------------------------------------

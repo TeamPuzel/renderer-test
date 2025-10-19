@@ -10,6 +10,7 @@
 #include <vector>
 #include <span>
 #include <ranges>
+#include <format>
 
 #ifdef ENABLE_VULKAN_SUPPORT
 #include <vulkan/vulkan.hpp>
@@ -77,9 +78,19 @@ namespace raytracer {
     };
 
     struct Mesh final {
+        struct FaceElement final {
+            usize vertex;
+            usize texture_coordinate;
+            usize normal;
+        };
+
+        using Face = std::array<FaceElement, 3>;
+
         math::Vector<f32, 3> position;
         std::vector<math::Vector<f32, 3>> vertices;
-        std::vector<std::array<usize, 3>> faces;
+        std::vector<math::Vector<f32, 3>> texture_coordinates;
+        std::vector<math::Vector<f32, 3>> normals;
+        std::vector<Face> faces;
         f32 scale { 1.f };
         math::Angle<f32> pitch { 0.f };
         math::Angle<f32> yaw { 0.f };
@@ -106,7 +117,7 @@ namespace raytracer {
       private:
         static void compute_bounds(
             std::span<const math::Vector<f32, 3>> vertices,
-            std::span<const std::array<usize, 3>> faces,
+            std::span<const Face> faces,
             math::Vector<f32, 3>& out_min,
             math::Vector<f32, 3>& out_max
         ) {
@@ -118,8 +129,8 @@ namespace raytracer {
             out_max = { -INF, -INF, -INF };
 
             for (auto const& face : faces) {
-                for (usize idx : face) {
-                    const auto& v = vertices[idx];
+                for (auto [vertex, _, _] : face) {
+                    const auto& v = vertices[vertex];
                     for (i32 a = 0; a < 3; a += 1) {
                         out_min[a] = std::min(out_min[a], v[a]);
                         out_max[a] = std::max(out_max[a], v[a]);
@@ -130,7 +141,7 @@ namespace raytracer {
 
         static auto partition_faces(
             std::span<const math::Vector<f32, 3>> vertices,
-            std::span<std::array<usize, 3>> faces,
+            std::span<Face> faces,
             i32 axis,
             f32 split
         ) -> usize {
@@ -139,7 +150,7 @@ namespace raytracer {
 
             while (i < j) {
                 const auto& f = faces[i];
-                math::Vector<f32, 3> c = (vertices[f[0]] + vertices[f[1]] + vertices[f[2]]) / 3.f;
+                math::Vector<f32, 3> c = (vertices[f[0].vertex] + vertices[f[1].vertex] + vertices[f[2].vertex]) / 3.f;
 
                 if (c[axis] < split) {
                     i += 1;
@@ -154,7 +165,7 @@ namespace raytracer {
 
         static auto build_bvh(
             std::span<const math::Vector<f32, 3>> vertices,
-            std::span<std::array<usize, 3>> faces,
+            std::span<Face> faces,
             usize face_offset,
             usize leaf_size = 4
         ) -> Box<Mesh::BvhNode> {
@@ -201,14 +212,14 @@ namespace raytracer {
             bvh = build_bvh(vertices, faces, 0);
         }
 
-        static bool intersect_aabb(
+        static auto intersect_aabb(
             math::Vector<f32, 3> const& origin,
             math::Vector<f32, 3> const& dir_inv,
             math::Vector<f32, 3> const& bmin,
             math::Vector<f32, 3> const& bmax,
             f32& tmin_out,
             f32& tmax_out
-        ) {
+        ) -> bool {
             f32 tmin = -std::numeric_limits<f32>::infinity();
             f32 tmax =  std::numeric_limits<f32>::infinity();
 
@@ -228,13 +239,17 @@ namespace raytracer {
             return true;
         }
 
-        static std::optional<Hit> intersect_triangle(
+        static auto intersect_triangle(
             math::Vector<f32, 3> const& origin,
             math::Vector<f32, 3> const& dir,
             math::Vector<f32, 3> const& v0,
             math::Vector<f32, 3> const& v1,
-            math::Vector<f32, 3> const& v2
-        ) {
+            math::Vector<f32, 3> const& v2,
+            math::Vector<f32, 3> const& n0,
+            math::Vector<f32, 3> const& n1,
+            math::Vector<f32, 3> const& n2,
+            Shading shading
+        ) -> std::optional<Hit> {
             // Möller–Trumbore
             constexpr f32 EPS = 1e-6f;
             auto e1 = v1 - v0;
@@ -258,7 +273,9 @@ namespace raytracer {
 
             Hit hit;
             hit.origin = origin + dir * t;
-            hit.normal = e1.cross(e2).normalized();
+            hit.normal = shading == Shading::Flat
+                ? e1.cross(e2).normalized()
+                : (n0 * (1.f - u - v) + n1 * u + n2 * v).normalized();
             hit.distance = t;
             return hit;
         }
@@ -272,20 +289,23 @@ namespace raytracer {
             Hit& best_hit
         ) const {
             f32 tmin, tmax;
-            if (!intersect_aabb(origin, dir_inv, node->bound_min, node->bound_max, tmin, tmax))
+            if (not intersect_aabb(origin, dir_inv, node->bound_min, node->bound_max, tmin, tmax))
                 return false;
 
             bool hit_any = false;
 
             // Leaf node
-            if (!node->left && !node->right) {
-                for (usize i = 0; i < node->face_count; i++) {
+            if (not node->left and not node->right) {
+                for (usize i = 0; i < node->face_count; i += 1) {
                     auto const& face = faces[node->face_index + i];
-                    auto const& v0 = vertices[face[0]];
-                    auto const& v1 = vertices[face[1]];
-                    auto const& v2 = vertices[face[2]];
+                    auto const& v0 = vertices[face[0].vertex];
+                    auto const& v1 = vertices[face[1].vertex];
+                    auto const& v2 = vertices[face[2].vertex];
+                    auto const& n0 = normals[face[0].normal];
+                    auto const& n1 = normals[face[1].normal];
+                    auto const& n2 = normals[face[2].normal];
 
-                    if (auto hit = intersect_triangle(origin, dir, v0, v1, v2)) {
+                    if (auto hit = intersect_triangle(origin, dir, v0, v1, v2, n0, n1, n2, shading)) {
                         if (hit->distance < best_distance) {
                             best_distance = hit->distance;
                             best_hit = *hit;
@@ -327,9 +347,9 @@ namespace raytracer {
             auto local_origin = (o4 * world_to_local_mat);
             auto local_dir    = (d4 * world_to_local_mat).normalized();
             auto local_dir_inv = math::Vector<f32, 3>{
-                1.0f / local_dir[0],
-                1.0f / local_dir[1],
-                1.0f / local_dir[2]
+                1.f / local_dir[0],
+                1.f / local_dir[1],
+                1.f / local_dir[2]
             };
 
             f32 best_distance = std::numeric_limits<f32>::max();
@@ -501,11 +521,56 @@ namespace raytracer {
                         std::stof(std::string(next().value())),
                         std::stof(std::string(next().value()))
                     );
+                } else if (id == "vt") {
+                    mesh.texture_coordinates.emplace_back(
+                        next().transform([] (auto e) { return std::stof(std::string(e)); }).value(),
+                        next().transform([] (auto e) { return std::stof(std::string(e)); }).value_or(0.f),
+                        next().transform([] (auto e) { return std::stof(std::string(e)); }).value_or(0.f)
+                    );
+                } else if (id == "vn") {
+                    mesh.normals.emplace_back(
+                        std::stof(std::string(next().value())),
+                        std::stof(std::string(next().value())),
+                        std::stof(std::string(next().value()))
+                    );
                 } else if (id == "f") {
+                    const static auto parse_face_element = [&] () -> Mesh::FaceElement {
+                        auto element_components = next().value() | std::views::split('/');
+
+                        auto it = element_components.begin();
+                        const auto next_element_component = [&] -> std::optional<std::string_view> {
+                            if (it == element_components.end()) [[unlikely]] return std::nullopt;
+                            else {
+                                auto const& ret = *it++;
+                                return std::string_view(&*ret.begin(), std::ranges::distance(ret));
+                            }
+                        };
+
+                        // C++ is a sad language so we can't use the constructor as a callable.
+                        // That being said it sucks in the first place because it requires allocating a string
+                        // to be able to parse the number. It works with C strings but that's not a slice >:(
+                        // Terrible design, all of this.
+                        // There's also no flat transform which is neat, and the error handling is exceptions
+                        // which is rather stupid for something so small and commonly used in loops.
+                        constexpr auto sv_to_u64 = [] (auto&& v) -> u64 {
+                            try {
+                                return std::stoul(std::string(v));
+                            } catch (std::exception e) {
+                                return 0;
+                            }
+                        };
+
+                        return {
+                            .vertex             = next_element_component().transform(sv_to_u64).value() - 1,
+                            .texture_coordinate = next_element_component().transform(sv_to_u64).value_or(0) - 1,
+                            .normal             = next_element_component().transform(sv_to_u64).value_or(0) - 1
+                        };
+                    };
+
                     mesh.faces.push_back({
-                        std::stoul(std::string(next().value())) - 1,
-                        std::stoul(std::string(next().value())) - 1,
-                        std::stoul(std::string(next().value())) - 1
+                        parse_face_element(),
+                        parse_face_element(),
+                        parse_face_element()
                     });
                 } else if (id == "s") [[unlikely]] {
                     mesh.shading = std::stoul(std::string(next().value())) ? Mesh::Shading::Smooth : Mesh::Shading::Flat;
@@ -811,26 +876,42 @@ namespace raytracer {
         mutable u32 vk_buffer_width  = 0;
         mutable u32 vk_buffer_height = 0;
 
+        class VulkanUsageError final : std::exception {
+            std::string reason;
+
+          public:
+            explicit VulkanUsageError(std::string reason) : reason(std::move(reason)) {}
+
+            auto what() const noexcept -> char const* override {
+                return reason.c_str();
+            };
+        };
+
         void init_vulkan(Io& io) {
             vk::ApplicationInfo app_info {
-                "Raytracer", 1,
-                "Puzel", 1,
+                "Raytracer", VK_MAKE_VERSION(1, 0, 0),
+                "Puzel", VK_MAKE_VERSION(1, 0, 0),
                 VK_API_VERSION_1_4
             };
 
             std::array layers = { "VK_LAYER_KHRONOS_validation" };
+            std::array extensions = {
+                VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME
+            };
 
             vk::InstanceCreateInfo create_info {
                 vk::InstanceCreateFlagBits::eEnumeratePortabilityKHR,
                 &app_info,
                 layers.size(),
-                layers.data()
+                layers.data(),
+                extensions.size(),
+                extensions.data()
             };
 
             vk_instance = vk::createInstanceUnique(create_info);
 
             std::vector<vk::PhysicalDevice> devices = vk_instance->enumeratePhysicalDevices();
-            if (devices.empty()) throw std::runtime_error("No physical devices found");
+            if (devices.empty()) throw VulkanUsageError("No physical devices found");
 
             vk::PhysicalDevice physical_device;
             u32 compute_queue_family_index = std::numeric_limits<u32>::max();
@@ -846,29 +927,61 @@ namespace raytracer {
                 }
             }
           end_device_loop:
-            if (not physical_device) throw std::runtime_error("No suitable compute device found");
+            if (not physical_device) throw VulkanUsageError("No suitable compute device found");
 
             f32 priority = 1.f;
             vk::DeviceQueueCreateInfo queue_create_info { {}, compute_queue_family_index, 1, &priority };
 
-            vk::DeviceCreateInfo device_info;
+            std::array device_extensions = {
+                "VK_KHR_portability_subset"
+            };
+
+            vk::DeviceCreateInfo device_info { {}, {}, {},
+                {}, {},
+                device_extensions.size(), device_extensions.data()
+            };
             device_info.queueCreateInfoCount = 1;
             device_info.pQueueCreateInfos = &queue_create_info;
 
             vk_device = physical_device.createDeviceUnique(device_info);
             vk_queue = vk_device->getQueue(compute_queue_family_index, 0);
 
-            auto shader = io.read_file("res/bsdf.comp.spv");
+            auto shader = io.read_file("res/basdf.comp.spv");
             vk::ShaderModuleCreateInfo shader_info { {}, shader.size(), (u32 const*) shader.data() };
             vk_shader_module = vk_device->createShaderModuleUnique(shader_info);
+
+            vk::PhysicalDeviceMemoryProperties memory_properties = physical_device.getMemoryProperties();
         }
+
+        std::optional<std::string> vk_error;
+        std::optional<std::string> generic_error;
 
       public:
         void draw_vulkan(Io& io, rt::Input const& input, draw::Ref<draw::Image> target) const {
             World& self = *const_cast<World*>(this); // Hack to do some interior mutability conveniently.
 
-            if (not vk_instance) self.init_vulkan(io);
-
+            if (vk_error or generic_error) {
+                auto message = draw::Text(
+                    vk_error
+                        ? std::format("Vulkan Error: {}", *vk_error)
+                        : std::format("Generic Error: {}", *generic_error),
+                    font::mine(io),
+                    draw::color::pico::RED)
+                ;
+                target
+                    | draw::clear(draw::color::BLACK)
+                    | draw::draw(message, target.width() - message.width() - 8, target.height() - message.height() - 8);
+            } else if (not vk_instance) {
+                try {
+                    self.init_vulkan(io);
+                } catch (vk::Error& e) {
+                    self.vk_error = e.what();
+                } catch (VulkanUsageError& e) {
+                    self.generic_error = e.what();
+                } catch (SdlIo::Error& e) {
+                    self.generic_error = e.what();
+                }
+            }
 
         }
 #else
