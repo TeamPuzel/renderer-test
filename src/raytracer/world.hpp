@@ -10,7 +10,6 @@
 #include <vector>
 #include <span>
 #include <ranges>
-#include <format>
 
 #ifdef ENABLE_VULKAN_SUPPORT
 #include <vulkan/vulkan.hpp>
@@ -865,7 +864,8 @@ namespace raytracer {
             );
         }
 
-// Note that the Vulkan implementation is incomplete and does not do anything yet.
+// Note that the Vulkan implementation is incomplete and does not do anything yet,
+// It's just there for figuring out how to set up compute.
 #ifdef ENABLE_VULKAN_SUPPORT
       private:
         vk::UniqueInstance vk_instance;
@@ -965,7 +965,7 @@ namespace raytracer {
                     vk_error
                         ? std::format("Vulkan Error: {}", *vk_error)
                         : std::format("Generic Error: {}", *generic_error),
-                    font::mine(io),
+                    font::mine(),
                     draw::color::pico::RED)
                 ;
                 target
@@ -986,7 +986,7 @@ namespace raytracer {
         }
 #else
         void draw_vulkan(Io& io, rt::Input const& input, draw::Ref<draw::Image> target) const {
-            auto message = draw::Text("Vulkan support not compiled", font::mine(io), draw::color::pico::RED);
+            auto message = draw::Text("Vulkan support not compiled", font::mine(), draw::color::pico::RED);
             target
                 | draw::clear(draw::color::BLACK)
                 | draw::draw(message, target.width() - message.width() - 8, target.height() - message.height() - 8);

@@ -139,7 +139,7 @@ class RayTracer final {
                     << "GI mode: "      << world.get_gi_mode()                                 << std::endl;
             }
 
-            target | draw::draw(draw::MultilineText(out.str(), font::mine(io)), 8, 8);
+            target | draw::draw(draw::MultilineText(out.str(), font::mine()), 8, 8);
         }
     }
 };

@@ -10,7 +10,7 @@ namespace font {
     using draw::Image;
     using draw::Ref;
 
-    inline auto sonic(Io& io) -> Font<Ref<const Image>, char> const& {
+    inline auto sonic(Io& io = Io::unsafe_get_threadlocal_io()) -> Font<Ref<const Image>, char> const& {
         using Inner = Ref<const Image>;
         using Symbol = draw::Symbol<Inner>;
 
@@ -81,7 +81,7 @@ namespace font {
         return font;
     }
 
-    inline auto pico(Io& io) -> Font<Ref<const Image>, char> const& {
+    inline auto pico(Io& io = Io::unsafe_get_threadlocal_io()) -> Font<Ref<const Image>, char> const& {
         using Inner = Ref<const Image>;
         using Symbol = draw::Symbol<Inner>;
 
@@ -178,7 +178,7 @@ namespace font {
         return font;
     }
 
-    inline auto mine(Io& io) -> Font<Ref<const Image>, char> const& {
+    inline auto mine(Io& io = Io::unsafe_get_threadlocal_io()) -> Font<Ref<const Image>, char> const& {
         using Inner = Ref<const Image>;
         using Symbol = draw::Symbol<Inner>;
 
@@ -332,7 +332,7 @@ namespace font {
         return font;
     }
 
-    inline auto mine_u16(Io& io) -> Font<Ref<const Image>, char16> const& {
+    inline auto mine_u16(Io& io = Io::unsafe_get_threadlocal_io()) -> Font<Ref<const Image>, char16> const& {
         using Inner = Ref<const Image>;
         using Symbol = draw::Symbol<Inner>;
 
@@ -486,7 +486,7 @@ namespace font {
         return font;
     }
 
-    inline auto pod(Io& io) -> Font<Ref<const Image>, char> const& {
+    inline auto pod(Io& io = Io::unsafe_get_threadlocal_io()) -> Font<Ref<const Image>, char> const& {
         using Inner = Ref<const Image>;
         using Symbol = draw::Symbol<Inner>;
 

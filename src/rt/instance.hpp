@@ -40,6 +40,10 @@ class SdlIo final : public Io {
         return ret;
     }
 
+    void perform_write_file(char const* path, std::span<u8> data) override {
+        SDL_SaveFile(path, data.data(), data.size());
+    }
+
     /// A dynamic library loader in terms of SDL3.
     /// It offers little control but it happens to make the sensible choice of RTLD_NOW | RTLD_LOCAL which is
     /// exactly what we want and I will assume the semantics are preserved on other platforms or this would be a sad API.
@@ -576,6 +580,8 @@ namespace rt {
         resize_texture(width / scale, height / scale);
 
         SdlIo io;
+        Io::unsafe_push_threadlocal_io(&io);
+
         game.init(io);
 
         SDL_Event event;
@@ -621,7 +627,7 @@ namespace rt {
                     << "Scale: " << scale << 'x' << std::endl
                     << "Resolution: " << target.width() << 'x' << target.height() << std::endl;
 
-                draw::MultilineText text { out.str(), font::mine(io) };
+                draw::MultilineText text { out.str(), font::mine() };
                 target | draw::draw(text, target.width() - text.width() - 8, 8);
             };
 
@@ -675,6 +681,7 @@ namespace rt {
         }
     end:
 
+        Io::unsafe_pop_threadlocal_io();
         SDL_DestroyTexture(texture);
         SDL_DestroyRenderer(renderer);
         SDL_DestroyWindow(window);
@@ -691,5 +698,14 @@ namespace rt {
     /// This overload uses the default window size of 800x600.
     inline void run(Instance auto& game, char const* title, i32 scale = 1) {
         run(game, title, 800, 600, scale);
+    }
+
+    template <typename F> void run_io(F fn) requires requires (F fn, Io& io) { fn(io); } {
+        SDL_Init(0);
+        SdlIo io;
+        Io::unsafe_push_threadlocal_io(&io);
+        fn(io);
+        Io::unsafe_pop_threadlocal_io();
+        SDL_Quit();
     }
 }

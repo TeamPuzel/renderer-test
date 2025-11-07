@@ -20,8 +20,8 @@ if (NOT CMAKE_CXX_COMPILER_FRONTEND_VARIANT MATCHES "MSVC")
 endif()
 
 if (${CMAKE_SYSTEM_NAME} STREQUAL "Windows")
-    set(SDL3_DIR "lib/SDL3-3.2.20/cmake")
-    file(COPY "lib/SDL3-3.2.20/lib/x64/SDL3.dll" DESTINATION ${CMAKE_CURRENT_BINARY_DIR})
+    set(SDL3_DIR "lib/SDL3-3.2.24/cmake")
+    file(COPY "lib/SDL3-3.2.24/lib/x64/SDL3.dll" DESTINATION ${CMAKE_CURRENT_BINARY_DIR})
 endif()
 
 # Depencencies ---------------------------------------------------------------------------------------------------------
